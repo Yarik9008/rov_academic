@@ -1,38 +1,150 @@
 #include <Arduino.h>
-#include <HardwareSerial.h>
-#include <math.h>
 #include "Config.h"
-#include "ROVController.h"
 
-// Определения Serial портов
-// Serial1 уже определен в фреймворке Arduino для STM32
-// Определяем только дополнительные Serial порты
-HardwareSerial Serial2(SERIAL2_RX, SERIAL2_TX);
+// Калибровочные значения (центр джойстиков)
+int joy1X_zero = ADC_MAX_VALUE / 2;
+int joy1Y_zero = ADC_MAX_VALUE / 2;
+int joy2X_zero = ADC_MAX_VALUE / 2;
+int joy2Y_zero = ADC_MAX_VALUE / 2;
 
-// Основной контроллер ROV
-ROVController rov_controller;
+// Фильтры Калмана для каждого джойстика
+KalmanFilter kalman_joy1X = {ADC_MAX_VALUE / 2, KALMAN_P_INIT, 0, KALMAN_Q, KALMAN_R};
+KalmanFilter kalman_joy1Y = {ADC_MAX_VALUE / 2, KALMAN_P_INIT, 0, KALMAN_Q, KALMAN_R};
+KalmanFilter kalman_joy2X = {ADC_MAX_VALUE / 2, KALMAN_P_INIT, 0, KALMAN_Q, KALMAN_R};
+KalmanFilter kalman_joy2Y = {ADC_MAX_VALUE / 2, KALMAN_P_INIT, 0, KALMAN_Q, KALMAN_R};
 
-// ARDUINO FUNCTIONS
+// Применение фильтра Калмана
+float applyKalmanFilter(KalmanFilter &kf, float measurement) {
+    // Предсказание
+    kf.P = kf.P + kf.Q;
+    // Обновление коэффициента Калмана
+    kf.K = kf.P / (kf.P + kf.R);
+    // Коррекция оценки
+    kf.x = kf.x + kf.K * (measurement - kf.x);
+    // Обновление ковариации
+    kf.P = (1 - kf.K) * kf.P;
+    return kf.x;
+}
+
+// Чтение и нормализация джойстика с фильтрацией Калмана
+int readJoystick(int pin, int zero, KalmanFilter &kf, float coefficient) {
+    // Опрос пина
+    int raw = analogRead(pin);
+    
+    // Применение фильтра Калмана
+    float filtered = applyKalmanFilter(kf, raw);
+    
+    // Учет центрального значения
+    int offset = (int)filtered - zero;
+    
+    // Мертвая зона
+    if (abs(offset) < DEAD_ZONE) offset = 0;
+    
+    // Ограничение диапазона
+    offset = constrain(offset, -MAX_JOYSTICK_RANGE, MAX_JOYSTICK_RANGE);
+    
+    // Применение коэффициента вклада
+    offset = (int)(offset * coefficient);
+    
+    // Преобразование в диапазон MIN_JOYSTIK_RANGE - MAX_JOYSTICK_RANGE
+    // где CENTER_JOYSTIK_RANGE = центр
+    int range = MAX_JOYSTICK_RANGE - MIN_JOYSTIK_RANGE;
+    return CENTER_JOYSTIK_RANGE + (offset * range) / (MAX_JOYSTICK_RANGE * 2);
+}
+
+// Чтение всех данных
+void readData(int* joy, int* buttons) {
+    // Статический экземпляр коэффициентов
+    static const JoystickCoefficients coeffs;
+    
+    // Джойстики (значения в диапазоне MIN_JOYSTIK_RANGE - MAX_JOYSTICK_RANGE)
+    joy[0] = readJoystick(JOYSTICK1_X, joy1X_zero, kalman_joy1X, coeffs.stick1_x);  // joy1X
+    joy[1] = readJoystick(JOYSTICK1_Y, joy1Y_zero, kalman_joy1Y, coeffs.stick1_y);  // joy1Y
+    joy[2] = readJoystick(JOYSTICK2_X, joy2X_zero, kalman_joy2X, coeffs.stick2_x);  // joy2X
+    joy[3] = readJoystick(JOYSTICK2_Y, joy2Y_zero, kalman_joy2Y, coeffs.stick2_y);  // joy2Y
+
+    // Кнопки
+    buttons[0] = (!digitalRead(BUTTON1) && digitalRead(BUTTON2)) ? -1 : 
+                 (digitalRead(BUTTON1) && !digitalRead(BUTTON2)) ? 1 : 0;  // servo_cam
+    buttons[1] = (!digitalRead(BUTTON3) && digitalRead(BUTTON4)) ? -1 : 
+                 (digitalRead(BUTTON3) && !digitalRead(BUTTON4)) ? 1 : 0;  // gripper
+    buttons[2] = (!digitalRead(BUTTON5) && digitalRead(BUTTON6)) ? 1 : 
+                 (digitalRead(BUTTON5) && !digitalRead(BUTTON6)) ? -1 : 0;  // led
+    buttons[3] = !digitalRead(BUTTON7) ? 1 : 0;  // button7
+    buttons[4] = !digitalRead(BUTTON8) ? 1 : 0;  // button8
+}
 
 void setup() {
+    // Настройка пинов
+    pinMode(LED_PIN, OUTPUT);
+    pinMode(BUTTON1, INPUT_PULLUP);
+    pinMode(BUTTON2, INPUT_PULLUP);
+    pinMode(BUTTON3, INPUT_PULLUP);
+    pinMode(BUTTON4, INPUT_PULLUP);
+    pinMode(BUTTON5, INPUT_PULLUP);
+    pinMode(BUTTON6, INPUT_PULLUP);
+    pinMode(BUTTON7, INPUT_PULLUP);
+    pinMode(BUTTON8, INPUT_PULLUP);
     
-    // Инициализация Serial портов
+    // Настройка ADC
+    analogReadResolution(12);
+    
+    // Калибровка джойстиков (чтение центральных значений)
+    delay(100);  // Небольшая задержка для стабилизации
+    joy1X_zero = analogRead(JOYSTICK1_X);
+    joy1Y_zero = analogRead(JOYSTICK1_Y);
+    joy2X_zero = analogRead(JOYSTICK2_X);
+    joy2Y_zero = analogRead(JOYSTICK2_Y);
+    
+    // Инициализация фильтров Калмана центральными значениями
+    kalman_joy1X.x = joy1X_zero;
+    kalman_joy1Y.x = joy1Y_zero;
+    kalman_joy2X.x = joy2X_zero;
+    kalman_joy2Y.x = joy2Y_zero;
+    
+    // Инициализация Serial
+    Serial.begin(DEBUG_BAUD);
     Serial1.setRx(SERIAL1_RX);
     Serial1.setTx(SERIAL1_TX);
     Serial1.begin(SERIAL_BAUD);
     
-    Serial2.setRx(SERIAL2_RX);
-    Serial2.setTx(SERIAL2_TX);
-    Serial2.begin(DEBUG_BAUD);
-    
-    // Инициализация основного контроллера
-    rov_controller.initialize();
-    
-    // Вывод сообщения об успешной инициализации
-    Serial2.println("System initialized successfully");
+    Serial.println("ROV Gamepad Ready");
 }
 
 void loop() {
-    // Основной цикл обработки
-    rov_controller.update();
+    static unsigned long lastTime = 0;
+    unsigned long currentTime = millis();
+    
+    if (currentTime - lastTime >= DATA_INTERVAL) {
+        int joy[6];
+        int buttons[5];
+        
+        readData(joy, buttons);
+        
+        if (DEBUG_JOYSTICK) { 
+            // Вывод данных через Serial (отладка)
+            Serial.print("joy1X:"); Serial.print(joy[0]); Serial.print(" ");
+            Serial.print("joy1Y:"); Serial.print(joy[1]); Serial.print(" ");
+            Serial.print("joy2X:"); Serial.print(joy[2]); Serial.print(" ");
+            Serial.print("joy2Y:"); Serial.print(joy[3]); Serial.print(" ");
+            Serial.print("CAM:"); Serial.print(buttons[0]); Serial.print(" ");
+            Serial.print("GRIP:"); Serial.print(buttons[1]); Serial.print(" ");
+            Serial.print("LED:"); Serial.print(buttons[2]); Serial.print(" ");
+            Serial.print("B7:"); Serial.print(buttons[3]); Serial.print(" ");
+            Serial.print("B8:"); Serial.println(buttons[4]);
+        }
+        
+        // Вывод данных через Serial1
+        Serial1.print(joy[0]); Serial1.print(" ");
+        Serial1.print(joy[1]); Serial1.print(" ");
+        Serial1.print(joy[2]); Serial1.print(" ");
+        Serial1.print(joy[3]); Serial1.print(" ");
+        Serial1.print(buttons[0]); Serial1.print(" ");
+        Serial1.print(buttons[1]); Serial1.print(" ");
+        Serial1.print(buttons[2]); Serial1.print(" ");
+        Serial1.print(buttons[3]); Serial1.print(" ");
+        Serial1.println(buttons[4]);
+        
+        lastTime = currentTime;
+    }
 }

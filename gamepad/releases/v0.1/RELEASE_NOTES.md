@@ -26,16 +26,20 @@
 - Джойстик 2: PA2 (X), PA3 (Y) - вертикальное движение
 
 ### Кнопки
-- BUTTON0 (PA4) - поворот камеры влево
-- BUTTON1 (PA5) - поворот камеры вправо
-- BUTTON2 (PA6) - открыть манипулятор
-- BUTTON3 (PA7) - закрыть манипулятор
-- BUTTON4 (PB0) - включить освещение
-- BUTTON5 (PB1) - выключить освещение
+- BUTTON1 (PB12) - поворот камеры влево
+- BUTTON2 (PB13) - поворот камеры вправо
+- BUTTON3 (PB14) - открыть манипулятор
+- BUTTON4 (PB15) - закрыть манипулятор
+- BUTTON5 (PB6) - включить освещение
+- BUTTON6 (PB7) - выключить освещение
+- BUTTON7 (PB8) - зарезервировано
+- BUTTON8 (PB9) - зарезервировано
 
 ### Serial порты
-- Serial1 (PA9/PA10) - команды на ROV (115200 baud)
-- Serial2 (PB10/PB11) - отладочная телеметрия (115200 baud)
+- Serial (USB) - встроенный терминал для отладки (115200 baud)
+- Serial1 (PA9/PA10) - ADM2687E изолятор → команды на ROV (115200 baud)
+- RE (PA11) - Receive Enable (ADM2687E)
+- DE (PA8) - Data Enable (ADM2687E)
 
 ## Файлы релиза
 - `rov_gamepad_v0.1.bin` - прошивка для загрузки в микроконтроллер
@@ -55,9 +59,9 @@ motor0 motor1 motor2 motor3 motor4 motor5 motor6 motor7 camera manipulator light
 ```
 
 ## Телеметрия
-Отладочная информация через Serial2:
+Отладочная информация через Serial USB:
 ```
-JOYSTICKS: J1X:0.50 J1Y:0.00 J2X:0.00 J2Y:0.00 | BUTTONS: B0:0 B1:0 B2:0 B3:0 B4:0 B5:0
+JOYSTICKS: J1X:0.50 J1Y:0.00 J2X:0.00 J2Y:0.00 | BUTTONS: B1:0 B2:0 B3:0 B4:0 B5:0 B6:0 B7:0 B8:0
 COMMANDS: M0:1500 M1:1500 M2:1500 M3:1500 M4:1500 M5:1500 M6:1500 M7:1500 CAM:1500 MAN:1000 LIGHT:1000
 ```
 

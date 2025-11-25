@@ -1,76 +1,120 @@
+// подключаем библиотеки 
 #include <Arduino.h>
-#include "ROVMotor.h"
+#include <Servo.h>
+#include <GParser.h>
+#include <AsyncStream.h>
+#include <ServoSmooth.h>
+#include <Config.h>
+#include <GyverFilters.h>
 
-// Пины для моторов
-const int MOTOR_PINS[] = {3, 5, 6, 9}; // 4 мотора на разных пинах
-const int MOTOR_COUNT = 4;
+
+ServoSmooth servos[6];
+
+AsyncStream<100> serialCom(&Serial1, '\n');
+
+uint32_t turnTimer;
+uint32_t ledTimer;
+int ledState = LOW;
+
+// Массив для отправки данных на полезную нагрузку
+// [MOTOR1, MOTOR2, MOTOR3, MOTOR4, CAM, GRIP]
+int data_output[6] = {1500, 1500, 1500, 1500, 0, 0};
+
 
 void setup() {
-  Serial.begin(9600);
-  Serial.println("ROV Control System - Multiple BLDC Motors");
+  // подключение светодиода для индикации работы
+  pinMode(LED_PIN, OUTPUT);
+
+  // подключение отладочного сериала 
+  Serial.begin(BITRATE);
+
+  // подключение сериала для общения с постом управления 
+  // Serial1 на STM32F103 по умолчанию использует PA9 (TX) и PA10 (RX)
+  Serial1.setRx(UART_RX);
+  Serial1.setTx(UART_TX);
+  Serial1.begin(BITRATE);
   
-  // Добавление моторов в статический массив
-  for (int i = 0; i < MOTOR_COUNT; i++) {
-    if (ROVMotor::addMotor(MOTOR_PINS[i])) {
-      Serial.print("Motor ");
-      Serial.print(i);
-      Serial.print(" added on pin ");
-      Serial.println(MOTOR_PINS[i]);
-    } else {
-      Serial.print("Failed to add motor ");
-      Serial.println(i);
-    }
+  // подключаем моторы 
+  const uint16_t motor_pins[4] = {PIN_MOTOR_1, PIN_MOTOR_2, PIN_MOTOR_3, PIN_MOTOR_4};
+  for (int i = 0; i < 4; i++) {
+    servos[i].attach(motor_pins[i], 1000, 2000, 90);
+    servos[i].setDirection(MOTOR_INVERT[i]);
+    servos[i].setSpeed(SPEED_MOTORS);
+    servos[i].setAccel(ACCEL_MOTORS);
+    servos[i].setAutoDetach(false);
   }
-  
-  // Инициализация всех моторов
-  ROVMotor::beginAll();
-  
-  Serial.print("Total motors: ");
-  Serial.println(ROVMotor::getMotorCount());
-  
-  delay(2000);
+
+  // подключаем сервопривод камеры
+  servos[4].attach(PIN_SERVO_CAM, 1000, 2000, 90);
+  servos[4].setSpeed(SPEED_SERVO);
+  servos[4].setAccel(ACCELERATE_SERVO);
+  servos[4].writeMicroseconds(1500);
+  servos[4].setAutoDetach(false);
+
+  // подключаем сервопривод манипулятора
+  servos[5].attach(PIN_SERVO_ARM, 1000, 2000, 90);
+  servos[5].setSpeed(SPEED_SERVO);
+  servos[5].setAccel(ACCELERATE_SERVO);
+  servos[5].writeMicroseconds(1500);
+  servos[5].setAutoDetach(false);
+
 }
 
+// главный цикл работы
 void loop() {
-  // Обновление всех моторов с встроенным таймером (в стиле ServoSmooth)
-  ROVMotor::tickAll();
-  
-  static unsigned long lastCommandTime = 0;
-  static int commandStep = 0;
-  
-  if (millis() - lastCommandTime >= 8000) {
-    switch (commandStep) {
-      case 0: 
-        // Движение вперед - все моторы на 50% мощности
-        ROVMotor::setAllMotorsPercent(50);
-        Serial.println("All motors forward 50%");
-        break;
-        
-      case 1: 
-        // Поворот влево - разные скорости моторов в процентах
-        ROVMotor::setMotorPercent(0, 30); // Левый мотор медленнее
-        ROVMotor::setMotorPercent(1, 70); // Правый мотор быстрее
-        ROVMotor::setMotorPercent(2, 30); // Левый мотор медленнее
-        ROVMotor::setMotorPercent(3, 70); // Правый мотор быстрее
-        Serial.println("Turn left");
-        break;
-        
-      case 2: 
-        // Поворот вправо - разные скорости моторов в процентах
-        ROVMotor::setMotorPercent(0, 70); // Левый мотор быстрее
-        ROVMotor::setMotorPercent(1, 30); // Правый мотор медленнее
-        ROVMotor::setMotorPercent(2, 70); // Левый мотор быстрее
-        ROVMotor::setMotorPercent(3, 30); // Правый мотор медленнее
-        Serial.println("Turn right");
-        break;
-        
-      case 3: 
-        // Остановка всех моторов
-        ROVMotor::stopAllMotors();
-        Serial.println("All motors stop");
-        break;
+  // обновление сервоприводов
+  if (millis()- turnTimer >= 10){
+    turnTimer = millis();
+    for (int i = 0; i < 6; i++) {
+      servos[i].tick();
     }
-    commandStep = (commandStep + 1) % 4;
-    lastCommandTime = millis();
   }
+
+  // мигалка для индикации работы (период 500 мс)
+  if (millis() - ledTimer >= 500){
+    ledTimer = millis();
+    ledState = !ledState;
+    digitalWrite(LED_PIN, ledState);
+    if (DEBUG) Serial.println(ledState);
+  }
+    
+  // если данные получены
+  if (serialCom.available()) {
+
+    // парсим данные по резделителю возвращает список интов 
+    GParser data = GParser(serialCom.buf, ' ');
+
+    if (DEBUG) Serial.println(serialCom.buf);
+
+    if (data.amount() == 9){
+      // 1500 1500 1500 1500 1 1 1 1 1
+      // joy1X joy1Y joy2X joy2Y CAM GRIP LED B7 B8
+      int data_input[data.amount()];
+      int am = data.parseInts(data_input);
+
+      // формируем считаем управляющие значения для полезной нагрузки
+      // [MOTOR1, MOTOR2, MOTOR3, MOTOR4, CAM, GRIP, LED, B7, B8]
+      data_output[0] = data_input[3] + data_input[2] - 1500;  // MOTOR1
+      data_output[1] = data_input[3] - data_input[2] + 1500;  // MOTOR2
+      data_output[2] = data_input[1];  // MOTOR3
+      data_output[3] = data_input[1];  // MOTOR4
+      data_output[4] = 1500;  // CAM
+      data_output[5] = 1500;  // GRIP
+
+      // проверка и ограничение значений в диапазоне 1000-2000
+      for (int i = 0; i < 6; i++) {
+        if (data_output[i] < 1000) {
+          data_output[i] = 1000;
+        } else if (data_output[i] > 2000) {
+          data_output[i] = 2000;
+        }
+      }
+
+      // отправляем значения на полезную нагрузку
+      for (int i = 0; i < 6; i++) {
+        servos[i].writeMicroseconds(data_output[i]);
+      }  
+
+    }
+  }  
 }

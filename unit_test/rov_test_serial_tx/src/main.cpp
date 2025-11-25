@@ -2,26 +2,31 @@
 #include <Config.h>
 
 uint16_t count1 = 0;
+unsigned long previousMillis = 0;
 
 void setup() {
   // инициализация отладочного сериала 
-  Serial.begin(9600);
+  Serial.begin(115200);
   
   // инициализация сериала для отправки на основной пульт 
-  Serial1.setRX(UART_RX);
-  Serial1.setTX(UART_TX);
+  Serial1.setRx(SERIAL1_RX);
+  Serial1.setTx(SERIAL1_TX);
 
-  pinMode(UART_COM, OUTPUT);
-  digitalWrite(UART_COM, HIGH);
-
-  Serial1.begin(9600);
+  Serial1.begin(SERIAL_BAUD);
 }
 
 void loop() {
-  // отправка строки 
-  Serial1.println(count1);
-  Serial.print("send ");
-  Serial.println(count1);
-  count1  = count1 + 1;
-  delay(TIMEOUT);                
+  unsigned long currentMillis = millis();
+  
+  // проверяем, прошло ли достаточно времени с последней отправки
+  if (currentMillis - previousMillis >= TIMEOUT) {
+    // отправка строки 
+    Serial1.println(count1);
+    Serial.print("send ");
+    Serial.println(count1);
+    count1 = count1 + 1;
+    
+    // обновляем время последней отправки
+    previousMillis = currentMillis;
+  }
 }
